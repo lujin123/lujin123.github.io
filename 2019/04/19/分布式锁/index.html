@@ -1,0 +1,74 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta name="generator" content="Hexo 3.8.0"><meta http-equiv="content-type" content="text/html; charset=utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport"><meta content="yes" name="apple-mobile-web-app-capable"><meta content="black-translucent" name="apple-mobile-web-app-status-bar-style"><meta content="telephone=no" name="format-detection"><meta name="description" content="不生产代码，只做代码的搬运工~"><title>分布式锁 | 小小落木</title><link rel="stylesheet" type="text/css" href="/css/style.css?v=0.0.0"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/normalize/6.0.0/normalize.min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/0.6.2/pure-min.css"><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/pure/0.6.2/grids-responsive-min.css"><link rel="stylesheet" href="//cdn.bootcss.com/font-awesome/4.7.0/css/font-awesome.min.css"><script type="text/javascript" src="//cdn.bootcss.com/jquery/3.2.1/jquery.min.js"></script><link rel="Shortcut Icon" type="image/x-icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="apple-touch-icon-precomposed" href="/apple-touch-icon.png"></head><body><div class="body_container"><div id="header"><div class="site-name"><h1 class="hidden">分布式锁</h1><a id="logo" href="/.">小小落木</a><p class="description"></p></div><div id="nav-menu"><a href="/." class="current"><i class="fa fa-home"> 首页</i></a><a href="/archives/"><i class="fa fa-archive"> 归档</i></a><a href="/about"><i class="fa fa-user"> 关于</i></a></div></div><div id="layout" class="pure-g"><div class="pure-u-1 pure-u-md-3-4"><div class="content_container"><div class="post"><h1 class="post-title">分布式锁</h1><div class="post-meta">Apr 19, 2019<script src="https://dn-lbstatics.qbox.me/busuanzi/2.3/busuanzi.pure.mini.js" async></script><span id="busuanzi_container_page_pv"> | <span id="busuanzi_value_page_pv"></span><span> 阅读</span></span></div><div class="post-content"><p>简单的记录下分布式锁的东西，尤其是用<code>redis</code>实现的分布式锁</p>
+<h2 id="基本概念"><a href="#基本概念" class="headerlink" title="基本概念"></a>基本概念</h2><p>分布式锁是控制分布式系统之间同步访问共享资源的一种方式。与互斥锁和读写锁之类的很类似，只不过它可以控制多个系统间的同步访问。</p>
+<h2 id="分布式锁需要满足的条件"><a href="#分布式锁需要满足的条件" class="headerlink" title="分布式锁需要满足的条件"></a>分布式锁需要满足的条件</h2><p>一个简单的分布式锁需要满足的条件有：</p>
+<ol>
+<li>需要是互斥的</li>
+<li>需要可重入</li>
+<li>可以是阻塞或者非阻塞</li>
+<li>高可用</li>
+<li>加锁和释放锁性能</li>
+<li>无死锁</li>
+</ol>
+<p>其实上面基本上最重要最基本的就是需要互斥然后无死锁</p>
+<h2 id="分布式锁的实现方式"><a href="#分布式锁的实现方式" class="headerlink" title="分布式锁的实现方式"></a>分布式锁的实现方式</h2><p>一个分布式锁，有很多的实现方式，如数据库，<code>redis</code>，<code>ZooKeeper</code>等</p>
+<h3 id="数据库"><a href="#数据库" class="headerlink" title="数据库"></a>数据库</h3><h4 id="基于数据库表"><a href="#基于数据库表" class="headerlink" title="基于数据库表"></a>基于数据库表</h4><p>这种最简单的，为表中一个字段加上唯一索引，加锁就是直接插入一条记录，插入成功表示成功获取到锁，唯一索引重复插入记录会引起错误，那就是加锁失败了。释放锁删除记录即可。</p>
+<p>这个方法问题挺多，如下：</p>
+<ol>
+<li>单点问题</li>
+<li>没有失效时间，解锁失败就导致死锁</li>
+<li>这是一个非阻塞的锁</li>
+<li>非重入锁</li>
+</ol>
+<h4 id="基于数据库表中的排他锁"><a href="#基于数据库表中的排他锁" class="headerlink" title="基于数据库表中的排他锁"></a>基于数据库表中的排他锁</h4><p>主要是使用数据库中自带的排他锁来实现，例如在<code>mysql</code>的<code>InnoDB</code>引擎中可以使用<code>select for update</code>，开启事务后会自动锁住该行记录（<em>注意查询语句条件中需要有唯一索引，否则会锁表</em>）。之后提交事务自动解锁。</p>
+<p>这个锁也有问题：</p>
+<ol>
+<li>单点</li>
+<li>非重入锁</li>
+<li>最重要的是这个锁是阻塞的，同时也导致了如果事务长时间不提交，会大量占用数据库连接，大量的连接可能会撑爆数据库连接池</li>
+<li>最后如果表中数据太少，数据库对<code>SQL</code>优化，最后生成的执行计划可能不会用到索引，如果全表扫描就会锁表</li>
+</ol>
+<p>综上所述，用数据实现分布式锁感觉不是很靠谱</p>
+<h3 id="基于缓存"><a href="#基于缓存" class="headerlink" title="基于缓存"></a>基于缓存</h3><p>缓存性能要比数据库好，而且集群部署也比较简单，解决锁性能和单点的问题。基于缓存主要就以<code>redis</code>为例。</p>
+<h4 id="单节点"><a href="#单节点" class="headerlink" title="单节点"></a>单节点</h4><p>在单节点的<code>redis</code>中实现一个分布式锁很简单，加锁操作如下：</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&gt; SETNX key value</span><br></pre></td></tr></table></figure>
+<p>这个方法就是在<code>key</code>不存在的时候设置<code>value</code>返回<code>1</code>，如果<code>key</code>存在直接返回<code>0</code>。</p>
+<p>这个方法没有过期时间，如果需要原子操作就直接用<code>SET</code>操作</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&gt; SET key value EX seconds NX</span><br></pre></td></tr></table></figure>
+<p>这样的一个原子操作就可以在<code>key</code>不存在时候设置<code>value</code>并且设置过期时间</p>
+<p>解锁操作需要先取出<code>value</code>判断是否为自己持有的锁，再进行删除，防止删掉别人的锁，没办法用一个命令操作完成，只能借助<code>lua</code>脚本的力量了</p>
+<figure class="highlight lua"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">if</span> redis.call(<span class="string">'get'</span>, KEYS[<span class="number">1</span>]) == ARGV[<span class="number">1</span>] <span class="keyword">then</span></span><br><span class="line">    <span class="keyword">return</span> redis.call(<span class="string">'del'</span>, KEYS[<span class="number">1</span>])</span><br><span class="line"><span class="keyword">else</span></span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span></span><br><span class="line"><span class="keyword">end</span></span><br></pre></td></tr></table></figure>
+<p>在用<code>Redis</code>的<code>eval</code>命令执行下即可</p>
+<figure class="highlight sh"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&gt; <span class="built_in">eval</span> lua_script</span><br></pre></td></tr></table></figure>
+<p>这个锁的问题：</p>
+<ol>
+<li>单节点容易故障</li>
+<li>无法重入</li>
+<li>超时时间无法准确控制，太短业务未执行完锁就被释放了，太长了如果自己释放失败会导致其他的人白白多等一会</li>
+</ol>
+<h4 id="分布式"><a href="#分布式" class="headerlink" title="分布式"></a>分布式</h4><p>为了解决单点单点问题，<code>redis</code>作者提出了<code>redlock</code>算法，具体可参考<a href="https://redislabs.com/redis-best-practices/communication-patterns/redlock/" target="_blank" rel="noopener">这里</a>。简单描述下这个算法：</p>
+<ol>
+<li>有 N 个<code>Redis</code>实例</li>
+<li>每次加锁前获取当前时间戳，设置锁的有效时间<code>T</code></li>
+<li>依次向<code>N</code>个实例发送加锁请求，设置连接超时时间等条件</li>
+<li>计算出加锁耗费时间<code>T1</code>和成功加锁节点<code>N1</code></li>
+<li>只有当<code>T&gt;T1 &amp;&amp; N1 &gt; N/2</code>时候加锁成功，即<em>加锁耗费时间小于锁的过期时间并且加锁成功的节点大于一半</em>才是加锁成功</li>
+<li>如果加锁失败，再一次给所有实例解锁，不管是否加锁成功的节点</li>
+</ol>
+<p>关于这个算法的问题，可以看看<a href="http://antirez.com/news/101" target="_blank" rel="noopener"><code>antirez</code></a>和<a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" target="_blank" rel="noopener"><code>Martin</code></a>的争论，最关键的问题是基于<em>自动过期机制</em>，原因是<em>只要由于程序自身的原因导致代码卡住，例如 gc 之类的东西，等到锁过期还不知道，那么就会导致同时多个客户端持有锁</em></p>
+<p>总的来说，从理论上来分析，<code>Redlock</code>算法是有问题的，因为它基于对时钟正确性的假设，没办法在程序<code>pause</code>的时候知道锁是否过期了。简单的解决办法就是使用<code>fencing token</code>，一个可以单调递增的东西，但是<code>redis</code>只能在单节点上生成这样的东西，这样又缺乏高可靠性，最终可能要引入一个一致性协议来完成，这不就是做了<code>etcd</code>、<code>ZooKeeper</code>这样的活了吗</p>
+<h3 id="基于-ZooKeeper"><a href="#基于-ZooKeeper" class="headerlink" title="基于 ZooKeeper"></a>基于 ZooKeeper</h3><p>其实我没用过<code>Zookeeper</code>，所以直接抄一段伪代码好了，理论上来说这样的实现要比<code>redis</code>的实现是安全的</p>
+<p><strong>获取锁</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">lock</span><span class="params">()</span></span>&#123;</span><br><span class="line">    path = 在父节点下创建临时顺序节点</span><br><span class="line">    <span class="keyword">while</span>(<span class="keyword">true</span>)&#123;</span><br><span class="line">        children = 获取父节点的所有节点</span><br><span class="line">        <span class="keyword">if</span>(path是children中的最小的)&#123;</span><br><span class="line">            代表获取了节点</span><br><span class="line">            <span class="keyword">return</span>;</span><br><span class="line">        &#125;<span class="keyword">else</span>&#123;</span><br><span class="line">            添加监控前一个节点是否存在的watcher</span><br><span class="line">            wait();</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">watcher中的内容&#123;</span><br><span class="line">    notifyAll();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p><strong>释放锁</strong>：</p>
+<figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">public</span> <span class="keyword">void</span> <span class="title">release</span><span class="params">()</span></span>&#123;</span><br><span class="line">    删除上述创建的节点</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>这个实现方法更加安全，用在关键性的应用更加让人放心，因为：</p>
+<ol>
+<li>自动释放锁</li>
+<li>可阻塞，可非阻塞</li>
+<li>可重入</li>
+<li>无单点问题</li>
+</ol>
+<p>缺点可能就是性能没那么好吧…</p>
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>基本上主要说了下基于<code>redis</code>实现的分布式锁的单点问题和<code>redlock</code>算法存在的问题</p>
+<p><code>Martin</code>分析说，你需要考虑自己用分布式锁的目的，是为了<code>高性能</code>还是<code>正确性</code>。如果是为了<code>高性能</code>并且<code>正确性</code>没多高的场景下，直接使用<code>redis</code>单节点的分布式锁，因为就是多个客户端拿到锁也没什么多大的问题，最多重复执行几次。但是在需要<code>正确性</code>的场景下，<code>redlock</code>算法的问题也不能保证正确性，所以还是建议使用一个合适的一致性协调系统，例如<code>Zookeeper</code>、<code>etcd</code>等，且保证存在<code>fencing token</code>。</p>
+</div><script type="text/javascript" src="/js/share.js?v=0.0.0" async></script><a data-url="http://yoursite.com/2019/04/19/分布式锁/" data-id="cjuoy1bv800022lwady4n85xo" class="article-share-link">分享</a><div class="tags"><a href="/tags/Redis/">Redis</a><a href="/tags/分布式/">分布式</a><a href="/tags/Lock/">Lock</a></div><div class="post-nav"><a href="/2019/03/24/缓存穿透和缓存雪崩/" class="next">缓存穿透和缓存雪崩</a></div></div></div></div><div class="pure-u-1-4 hidden_mid_and_down"><div id="sidebar"><div class="widget"><form action="//www.google.com/search" method="get" accept-charset="utf-8" target="_blank" class="search-form"><input type="text" name="q" maxlength="20" placeholder="Search"><input type="hidden" name="sitesearch" value="http://yoursite.com"></form></div><div class="widget"><div class="widget-title"><i class="fa fa-folder-o"> 分类</i></div></div><div class="widget"><div class="widget-title"><i class="fa fa-star-o"> 标签</i></div><div class="tagcloud"><a href="/tags/PWA/" style="font-size: 15px;">PWA</a> <a href="/tags/Web/" style="font-size: 15px;">Web</a> <a href="/tags/Redis/" style="font-size: 15px;">Redis</a> <a href="/tags/分布式/" style="font-size: 15px;">分布式</a> <a href="/tags/Lock/" style="font-size: 15px;">Lock</a> <a href="/tags/MySQL/" style="font-size: 15px;">MySQL</a></div></div><div class="widget"><div class="widget-title"><i class="fa fa-file-o"> 最近文章</i></div><ul class="post-list"><li class="post-list-item"><a class="post-list-link" href="/2019/04/19/分布式锁/">分布式锁</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/03/24/缓存穿透和缓存雪崩/">缓存穿透和缓存雪崩</a></li><li class="post-list-item"><a class="post-list-link" href="/2019/02/20/MySQL中的Int-N/">MySQL中的Int-N</a></li><li class="post-list-item"><a class="post-list-link" href="/2018/06/10/pwa改造之路/">pwa改造之路</a></li></ul></div><div class="widget"><div class="widget-title"><i class="fa fa-external-link"> 友情链接</i></div><ul></ul><a href="https://github.com/lujin123" title="GitHub" target="_blank">GitHub</a></div></div></div><div class="pure-u-1 pure-u-md-3-4"><div id="footer">Copyright © 2019 <a href="/." rel="nofollow">小小落木.</a> Powered by<a rel="nofollow" target="_blank" href="https://hexo.io"> Hexo.</a><a rel="nofollow" target="_blank" href="https://github.com/tufu9441/maupassant-hexo"> Theme</a> by<a rel="nofollow" target="_blank" href="https://github.com/pagecho"> Cho.</a></div></div></div><a id="rocket" href="#top" class="show"></a><script type="text/javascript" src="/js/totop.js?v=0.0.0" async></script><script type="text/javascript" src="//cdn.bootcss.com/fancybox/3.0.47/jquery.fancybox.min.js" async></script><script type="text/javascript" src="/js/fancybox.js?v=0.0.0" async></script><link rel="stylesheet" type="text/css" href="//cdn.bootcss.com/fancybox/3.0.47/jquery.fancybox.min.css"><script type="text/javascript" src="/js/codeblock-resizer.js?v=0.0.0"></script><script type="text/javascript" src="/js/smartresize.js?v=0.0.0"></script></div></body></html>
