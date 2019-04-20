@@ -45,7 +45,7 @@
 <li>无法重入</li>
 <li>超时时间无法准确控制，太短业务未执行完锁就被释放了，太长了如果自己释放失败会导致其他的人白白多等一会</li>
 </ol>
-<h4 id="分布式"><a href="#分布式" class="headerlink" title="分布式"></a>分布式</h4><p>为了解决单点单点问题，<code>redis</code>作者提出了<code>redlock</code>算法，具体可参考<a href="https://redislabs.com/redis-best-practices/communication-patterns/redlock/" target="_blank" rel="noopener">这里</a>。简单描述下这个算法：</p>
+<h4 id="分布式"><a href="#分布式" class="headerlink" title="分布式"></a>分布式</h4><p>为了解决单点单点问题，<code>redis</code>作者提出了<code>redlock</code>算法，具体可参考<a href="https://redis.io/topics/distlock" target="_blank" rel="noopener">这里</a>。简单描述下这个算法：</p>
 <ol>
 <li>有 N 个<code>Redis</code>实例</li>
 <li>每次加锁前获取当前时间戳，设置锁的有效时间<code>T</code></li>
